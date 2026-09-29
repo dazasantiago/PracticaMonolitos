@@ -1,0 +1,18 @@
+services:
+  rica-mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: rica
+    ports:
+      - "27017:27017"
+    volumes:
+      - rica-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rica-mongo-data:

@@ -1,0 +1,20 @@
+services:
+  rica-db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rica
+      POSTGRES_USER: rica
+      POSTGRES_PASSWORD: rica
+    ports:
+      - "5434:5432"
+    volumes:
+      - rica-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rica -d rica"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rica-db-data:
