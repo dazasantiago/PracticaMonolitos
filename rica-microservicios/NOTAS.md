@@ -70,7 +70,7 @@ Commit sobre `taller-hexagonal` (creada desde `taller-ddd`) con los puertos y ad
 - `GlobalExceptionHandler` de cada servicio solo maneja las excepciones de su propio dominio (`CorreoDuplicadoException` en investigadores; `LimiteAnualExcedidoException` en publicaciones). El original importaba ambas y no compilaba al separar.
 - `LimitePublicacionesAnualesService.puedeRegistrar` recibía un `Investigador` (clase del otro dominio) solo para leer su correo. Ahora recibe el `String` del correo: publicaciones deja de conocer `Investigador` — el "no cruza dominios" de la guía no era cierto en el código real.
 - `PublicacionService` depende de `VerificadorInvestigador` (puerto) en vez de `RepositorioInvestigadores`; `VerificadorInvestigadorPendiente` lo implementa aceptando todo correo, con `TODO Taller Leccion 6`.
-- Puerto de PostgreSQL 5434 (igual que rica-api) en vez de 5432, para no chocar con una instalación local.
+- Puertos de las bases en el host: PostgreSQL 5436 y MongoDB 27018 (no 5432/27017), para poder convivir con los contenedores del monolito `rica-api` (5434 y 27017).
 
 ### Brecha abierta a propósito
 
@@ -82,3 +82,7 @@ Con `VerificadorInvestigadorPendiente`, `POST /api/publicaciones` en `:8081` ace
 cd investigadores-service && docker-compose up -d && .\mvnw.cmd spring-boot:run   # :8080, PostgreSQL
 cd publicaciones-service  && docker-compose up -d && .\mvnw.cmd spring-boot:run   # :8081, MongoDB
 ```
+
+### Evidencia
+
+Capturas en `evidencia/`: `1-investigadores-service.png` (:8080), `2-publicaciones-service.png` (:8081) y `3-pruebas.png` (registro de un investigador, una publicación con correo real y otra con correo inventado que también se acepta — la brecha que cierra la Lección 6).

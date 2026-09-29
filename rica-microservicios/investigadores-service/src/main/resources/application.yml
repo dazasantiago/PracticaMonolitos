@@ -6,7 +6,7 @@ spring:
     name: investigadores-service
 
   datasource:
-    url: jdbc:postgresql://localhost:5434/rica
+    url: jdbc:postgresql://localhost:5436/rica
     username: rica
     password: rica
 

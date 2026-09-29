@@ -5,7 +5,7 @@ services:
     environment:
       MONGO_INITDB_DATABASE: rica
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
       - rica-mongo-data:/data/db
     healthcheck:

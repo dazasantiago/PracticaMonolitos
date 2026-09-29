@@ -6,4 +6,4 @@ spring:
     name: publicaciones-service
 
   mongodb:
-    uri: mongodb://localhost:27017/rica
+    uri: mongodb://localhost:27018/rica
