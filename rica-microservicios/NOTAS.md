@@ -162,3 +162,49 @@ Tras reproducir los eventos, `luis.mora` volvió a aparecer como `EN_ELIMINACION
 ### Evidencia (Lección 8)
 
 En `evidencia/leccion8/`: `1-ficha-ranking-y-404.png` (ficha con 2 publicaciones en una sola consulta, ranking ordenado, `DELETE` → 202 y la ficha eliminada devolviendo 404), `3-log-consultas-proyeccion.png` (líneas `Proyección: ...`, incluidos el replay y los eventos en vivo) y `5-lista-reconstruida.png` (fichas reconstruidas tras el Paso 8).
+
+## Lección 9 — Consumidores robustos en consultas-service
+
+### Qué se construyó
+
+- **Reintentos con backoff + Dead Letter Topic** (`ManejoErroresConfig`, `TopicosConfig`): `JacksonException` y `NullPointerException` (JSON roto, campo faltante) no se reintentan y van directo a `investigadores.registrados.DLT`; el resto se reintenta con espera 1 s, 2 s, 4 s antes de ir a la DLT.
+- **Consumidor idempotente** (`EstadisticasListener`, `RegistroEventosProcesados`, `EventoProcesado`): segundo consumidor del mismo tópico (grupo `consultas-estadisticas`) que cuenta altas. Registra `topico-particion-offset` como `_id` en `eventos_procesados`; el segundo insert falla con `DuplicateKeyException` y el evento se ignora.
+- Endpoint `GET /api/consultas/estadisticas` y 12 tests en consultas-service (7 del Taller 8 + 5 nuevos).
+
+### Diferencia con la guía
+
+Spring Kafka 4 (Spring Boot 4.1) nombra por defecto la DLT con el sufijo `-dlt` (en minúscula, `investigadores.registrados-dlt`), no `.DLT` como dice el taller. Con la configuración tal cual, el mensaje venenoso iba a un tópico auto-creado distinto y `investigadores.registrados.DLT` quedaba vacío. Se fijó el destino a mano en el `DeadLetterPublishingRecoverer` (`registro.topic() + ".DLT"`). El tópico huérfano `investigadores.registrados-dlt` quedó creado en Kafka por la primera prueba y no se usa.
+
+### Resultados observados
+
+| Paso | Observación |
+|---|---|
+| 2. Línea base (sin defensas) | 9 reintentos inmediatos (~0,5 s entre ellos) + el intento original, luego `Backoff ... exhausted for investigadores.registrados-0@7` y el mensaje se descarta |
+| 3. Con DLT | un solo error, sin reintentos; el mensaje queda en la DLT con `kafka_dlt-exception-fqcn`, `kafka_dlt-exception-message`, `kafka_dlt-original-topic`, partición, offset y grupo |
+| 4. Contador ingenuo | N = 6 (altas históricas), tras registrar uno: N+1 = 7 |
+| 5. Duplicados | tras devolver el grupo al principio: **14** (cada alta contada dos veces), sin ningún error en el log |
+| 6. Idempotente | mismo escenario: **7** exacto; al repetirlo, el log dice `evento ... ya procesado, se ignora` por cada mensaje |
+
+### Paso 7 — Discusión: ¿qué hacemos con la DLT?
+
+1. **¿Quién debería enterarse y cómo?** El equipo dueño del consumidor (en este caso consultas-service), con una alerta automática cuando el tamaño de la DLT sube por encima de cero (métrica de lag/offset de la DLT que dispare un aviso por correo o chat) y un tablero con los mensajes pendientes; hoy nadie la mira y el mensaje se queda guardado sin que nadie lo sepa.
+2. **¿Cómo se reprocesa un mensaje tras corregir el error?** Con una herramienta o tarea explícita que lea la DLT y reenvíe los mensajes ya corregidos al tópico original (o directamente a la lógica de proyección), con el `original-topic` y el `original-offset` de las cabeceras como trazabilidad; reenviar a mano al tópico original sin control puede reintroducir el mensaje a todos los consumidores del tópico, no solo al que falló.
+3. **¿Cuándo es válido descartar y quién decide?** Cuando el mensaje es basura que ningún arreglo puede recuperar (por ejemplo, un mensaje de prueba o con un formato que ningún productor legítimo envía), y lo decide el dueño del consumidor junto con el dueño del productor, dejando registro de qué se descartó y por qué.
+4. **¿Y si el mensaje de la DLT es válido pero llegó a destiempo?** Hay que comprobar el estado actual antes de aplicarlo: si el hecho que describe ya quedó superado por otros eventos (por ejemplo, el investigador ya fue eliminado), aplicarlo ciegamente resucita datos, como la ficha que reapareció en el Taller 8; por eso el reproceso debe ser idempotente y consultar el estado actual o usar números de versión.
+
+**Conexión con la Lección 10 (observabilidad):** nada de lo anterior es posible sin medir: métricas del tamaño y la antigüedad de la DLT, logs con el identificador del evento (`topico-particion-offset`), trazas que permitan seguir un mensaje de un servicio a otro, y alertas sobre ellas.
+
+### Por qué reintentar sin fin un mensaje venenoso es peor que perderlo y peor que enviarlo a una DLT
+
+Reintentar sin fin un mensaje que no se puede procesar bloquea la partición (nada detrás de él avanza) y consume recursos sin resolver nada, así que afecta a todos los mensajes sanos; es peor que perderlo porque con la pérdida al menos el consumidor sigue, y peor que la DLT porque la DLT también mantiene el flujo y además conserva el mensaje con su diagnóstico para que alguien lo revise o lo reprocese.
+
+### Límites conocidos de la idempotencia implementada
+
+- El id por posición (`tópico-partición-offset`) no detecta duplicados del productor (publicar dos veces el mismo hecho genera dos offsets); haría falta un id de negocio en el evento (por ejemplo, el id del Outbox).
+- Registrar el id y sumar son dos escrituras: si el proceso cae entre ambas se pierde un conteo; cerrarlo exige una transacción que cubra ambas o un efecto idempotente por naturaleza (calcular el total con un `count` sobre los eventos registrados).
+
+### Evidencia (Lección 9)
+
+En `evidencia/leccion9/`: `1-linea-base-reintentos.png`, `2-dlt-con-cabeceras.png`, `3-estadisticas-descuadre-y-idempotente.png` (valores antes/después del Paso 5 y tras repetir los eventos con el consumidor idempotente) y `4-log-ya-procesado.png` (líneas `evento ... ya procesado, se ignora`).
+
+Nota sobre la captura 4: las líneas se extrajeron del buffer de la propia consola donde corre `consultas-service` (el log de arranque se había desplazado fuera de la vista) y se reordenaron una por registro de log, sin alterar su contenido. La captura 1 se construyó igual a partir del log del servicio guardado en archivo.
