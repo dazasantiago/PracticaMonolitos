@@ -17,6 +17,10 @@ spring:
               uri: lb://publicaciones-service
               predicates:
                 - Path=/api/publicaciones/**
+            - id: consultas-route
+              uri: lb://consultas-service
+              predicates:
+                - Path=/api/consultas/**
 
 eureka:
   instance:

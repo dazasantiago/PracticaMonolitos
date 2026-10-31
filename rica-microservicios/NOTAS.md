@@ -131,3 +131,34 @@ eureka-server (:8761) -> investigadores-service (:8080, gRPC :9090) -> publicaci
 ### Evidencia (Lección 6)
 
 En `evidencia/leccion6/`: `0-cuatro-terminales.png` (eureka-server, investigadores-service, publicaciones-service y gateway corriendo a la vez), las cuatro capturas individuales y `5-pruebas-saga-y-bd.png` (registro vía Gateway, publicación por gRPC con correo real y 404 con correo inventado, `DELETE` → 202 y el `SELECT` que ya no lista al investigador eliminado). En los logs de las capturas 2 y 3 se ve la secuencia de la Saga: `Evento N publicado en investigadores.en-eliminacion` → `Saga: 1 publicaciones de ... marcadas como huérfanas` → `Saga: publicaciones confirmó para ... Eliminando investigador.`
+
+## Lección 8 — CQRS: consultas-service como lado de lectura
+
+### Qué se construyó
+
+- **Escritura:** `publicaciones-service` publica `publicaciones.registradas` (solo después de guardar con éxito) e `investigadores-service` publica `investigadores.eliminados` por el Outbox al cerrar la Saga. Ya existían `investigadores.registrados` e `investigadores.en-eliminacion`.
+- **Lectura:** `consultas-service` (:8083, base propia `rica_consultas` en la misma instancia de MongoDB) escucha los cuatro eventos y mantiene una `FichaInvestigador` por investigador, con sus publicaciones embebidas. Solo expone `GET` (`/api/consultas/investigadores`, `/investigadores/{correo}`, `/ranking`); el Gateway tiene la ruta `consultas-route`.
+- Pruebas: 7 en consultas-service (3 de la ficha, 4 del proyector, incluido el desorden entre tópicos y el duplicado), 1 nueva por cada servicio de escritura.
+
+### Diferencias con la guía del taller
+
+- En Spring Boot 4 la propiedad de MongoDB es `spring.mongodb.uri`, no `spring.data.mongodb.uri` como dice el taller: con la segunda, consultas se conectaba al 27017 por defecto y las consultas HTTP daban timeout. Además, el primer arranque consumió y perdió eventos (no pudo guardarlos), lo que obligó a cambiar el `group-id` y reproducirlos: es el mecanismo del Paso 8 usado "en la vida real".
+- Se usó `spring-boot-starter-webmvc` y springdoc 2.8.5 (los mismos que los otros servicios) en vez de `spring-boot-starter-web` y springdoc 3.1.0.
+- `LimitePublicacionesAnualesService.puedeRegistrar` ahora recibe `(correo, anio)`, como espera el test de la guía.
+- Mongo del host en 27018 (no 27017) y contenedor `publicaciones-service-rica-mongo-1`.
+
+### Explicación por punto del entregable (qué se vería distinto si lectura y escritura fueran el mismo modelo)
+
+1. **Ficha con dos publicaciones:** haría falta un `JOIN` o dos llamadas (investigadores + publicaciones) entre dos bases distintas; aquí un solo documento ya trae todo.
+2. **Ranking:** habría que contar publicaciones de todos los investigadores en cada consulta, sobre la base de escritura; aquí `totalPublicaciones` se guarda ya calculado y se ordena directamente.
+3. **Log con `Proyección: ...`:** no existiría ese paso; la consulta leería la misma tabla que escribe el comando, sin proyector ni eventos, y los dos lados escalarían y fallarían juntos.
+4. **404 tras la Saga:** la ficha desaparece solo porque el evento `investigadores.eliminados` llegó al lado de lectura; con un modelo único, el borrado sería inmediato y atómico, sin consistencia eventual (ni retraso visible).
+5. **Fichas reconstruidas:** con un solo modelo no se podría "destruir y rehacer" la lectura, porque sería la fuente de verdad; aquí se borró la colección y se reprodujeron los eventos con un `group-id` nuevo.
+
+### Trampa real observada en la reconstrucción
+
+Tras reproducir los eventos, `luis.mora` volvió a aparecer como `EN_ELIMINACION` (con 3 publicaciones), y también `mario.gomez` y `diego851`, que ya habían sido eliminados. No es un error de código: `investigadores.en-eliminacion` e `investigadores.eliminados` están en tópicos distintos y Kafka no garantiza orden entre tópicos, así que el "eliminado" pudo procesarse antes que el "en eliminación" y la ficha resucitó (en el caso de Mario y Diego, además, sus eliminaciones ocurrieron antes de que existiera el tópico `investigadores.eliminados`). En producción se evitaría publicando todos los eventos de un agregado en un solo tópico, con número de versión.
+
+### Evidencia (Lección 8)
+
+En `evidencia/leccion8/`: `1-ficha-ranking-y-404.png` (ficha con 2 publicaciones en una sola consulta, ranking ordenado, `DELETE` → 202 y la ficha eliminada devolviendo 404), `3-log-consultas-proyeccion.png` (líneas `Proyección: ...`, incluidos el replay y los eventos en vivo) y `5-lista-reconstruida.png` (fichas reconstruidas tras el Paso 8).

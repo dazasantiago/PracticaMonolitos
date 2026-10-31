@@ -13,9 +13,9 @@ public class LimitePublicacionesAnualesService {
         this.publicacionRepository = publicacionRepository;
     }
 
-    public boolean puedeRegistrar(String investigadorCorreo, Publicacion nueva) {
+    public boolean puedeRegistrar(String investigadorCorreo, Integer anio) {
         long registradasEsteAnio = publicacionRepository.countByInvestigadorCorreoAndAnio(
-                investigadorCorreo, nueva.getAnio());
+                investigadorCorreo, anio);
         return registradasEsteAnio < MAXIMO_POR_ANIO;
     }
 }
