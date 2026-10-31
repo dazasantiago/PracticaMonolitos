@@ -41,4 +41,10 @@ public class InvestigadorController {
                 .created(URI.create("/api/investigadores/" + guardado.getId()))
                 .body(response);
     }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> eliminar(@PathVariable Long id) {
+        investigadorService.iniciarEliminacion(id);
+        return ResponseEntity.accepted().build();
+    }
 }

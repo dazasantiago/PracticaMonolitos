@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option java_package = "com.rica.investigadoresservice.grpc";
+option java_multiple_files = true;
+
+service InvestigadorGrpc {
+  rpc ExisteInvestigador (InvestigadorRequest) returns (InvestigadorResponse) {}
+}
+
+message InvestigadorRequest {
+  string correoInstitucional = 1;
+}
+
+message InvestigadorResponse {
+  bool existe = 1;
+}

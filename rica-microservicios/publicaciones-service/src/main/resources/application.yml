@@ -5,5 +5,24 @@ spring:
   application:
     name: publicaciones-service
 
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: publicaciones-service
+      auto-offset-reset: earliest
+
+  grpc:
+    client:
+      channel:
+        investigadores:
+          target: static://localhost:9090
+
   mongodb:
     uri: mongodb://localhost:27018/rica
+
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka

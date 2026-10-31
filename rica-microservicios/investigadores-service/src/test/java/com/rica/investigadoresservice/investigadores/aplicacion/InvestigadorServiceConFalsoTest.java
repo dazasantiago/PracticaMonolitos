@@ -11,7 +11,7 @@ class InvestigadorServiceConFalsoTest {
     void registraYRecuperaUnInvestigadorSinNingunaDependenciaDeSpringNiDeBaseDeDatos() {
         RepositorioInvestigadoresFalso repositorio = new RepositorioInvestigadoresFalso();
         InvestigadorFactory factory = new InvestigadorFactory(repositorio, evento -> { });
-        InvestigadorService service = new InvestigadorService(repositorio, factory);
+        InvestigadorService service = new InvestigadorService(repositorio, factory, (topico, clave, contenido) -> { });
 
         Investigador guardado = service.registrar("Ana Torres", "ana.torres@uptc.edu.co", "GIT-UPTC");
 

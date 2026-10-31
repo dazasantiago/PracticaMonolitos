@@ -1,0 +1,26 @@
+server:
+  port: 8000
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: investigadores-route
+              uri: lb://investigadores-service
+              predicates:
+                - Path=/api/investigadores/**
+            - id: publicaciones-route
+              uri: lb://publicaciones-service
+              predicates:
+                - Path=/api/publicaciones/**
+
+eureka:
+  instance:
+    prefer-ip-address: true
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka

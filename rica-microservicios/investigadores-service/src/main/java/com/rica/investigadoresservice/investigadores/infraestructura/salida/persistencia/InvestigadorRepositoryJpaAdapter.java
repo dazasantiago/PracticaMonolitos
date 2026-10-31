@@ -35,4 +35,14 @@ public class InvestigadorRepositoryJpaAdapter implements RepositorioInvestigador
     public Investigador guardar(Investigador investigador) {
         return investigadorRepository.save(investigador);
     }
+
+    @Override
+    public Optional<Investigador> buscarPorCorreo(String correoInstitucional) {
+        return investigadorRepository.findByCorreoInstitucional_Valor(correoInstitucional);
+    }
+
+    @Override
+    public void eliminar(Investigador investigador) {
+        investigadorRepository.delete(investigador);
+    }
 }

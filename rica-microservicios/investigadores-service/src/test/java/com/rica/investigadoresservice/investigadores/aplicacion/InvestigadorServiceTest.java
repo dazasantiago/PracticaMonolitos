@@ -26,6 +26,9 @@ class InvestigadorServiceTest {
     @Mock
     private InvestigadorFactory investigadorFactory;
 
+    @Mock
+    private PublicadorEventos publicadorEventos;
+
     @InjectMocks
     private InvestigadorService investigadorService;
 

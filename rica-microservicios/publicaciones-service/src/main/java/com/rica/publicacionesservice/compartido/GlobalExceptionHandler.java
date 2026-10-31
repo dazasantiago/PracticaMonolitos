@@ -1,6 +1,7 @@
 package com.rica.publicacionesservice.compartido;
 
 import com.rica.publicacionesservice.publicaciones.LimiteAnualExcedidoException;
+import com.rica.publicacionesservice.publicaciones.ServicioNoDisponibleException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +24,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(LimiteAnualExcedidoException.class)
     public ResponseEntity<Map<String, Object>> manejarLimiteAnualExcedido(LimiteAnualExcedidoException ex) {
         return construirRespuesta(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(ServicioNoDisponibleException.class)
+    public ResponseEntity<Map<String, Object>> manejarServicioNoDisponible(ServicioNoDisponibleException ex) {
+        return construirRespuesta(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -86,3 +86,48 @@ cd publicaciones-service  && docker-compose up -d && .\mvnw.cmd spring-boot:run 
 ### Evidencia
 
 Capturas en `evidencia/`: `1-investigadores-service.png` (:8080), `2-publicaciones-service.png` (:8081) y `3-pruebas.png` (registro de un investigador, una publicación con correo real y otra con correo inventado que también se acepta — la brecha que cierra la Lección 6).
+
+## Lección 6 — Comunicación real entre servicios
+
+### Qué se construyó
+
+| Necesidad | Patrón | Dónde |
+|---|---|---|
+| Confirmar que un investigador existe antes de registrar una publicación | gRPC síncrono (puerto 9090) | `InvestigadorGrpcService` (servidor) y `VerificadorInvestigadorGrpc` (cliente) |
+| No caer en cascada si investigadores está caído | Circuit Breaker (Resilience4j) | `VerificadorInvestigadorGrpc` → HTTP 503 |
+| Ninguna dirección de red fija para HTTP | Service Registry (Eureka, :8761) | `eureka-server` |
+| Un único punto de entrada | API Gateway (:8000) | `gateway` |
+| Notificar un registro sin acoplar | Domain Event + Transactional Outbox (Kafka) | tabla `outbox_event` + `OutboxPoller` |
+| Eliminar un investigador sin transacción distribuida | Saga por coreografía | tópicos `investigadores.en-eliminacion` y `publicaciones.marcadas-huerfanas` |
+
+`VerificadorInvestigadorPendiente` se borró: la brecha del Taller 5 quedó cerrada. Con un correo inventado, `POST /api/publicaciones` ahora responde **404** ("No existe un investigador...") en vez de 201. `PublicacionService` no cambió: solo cambió el adaptador del puerto `VerificadorInvestigador` (la ganancia de la arquitectura hexagonal).
+
+### Decisiones y limitaciones
+
+- **La dirección gRPC sigue fija** (`static://localhost:9090`). Eureka resuelve el descubrimiento para el HTTP balanceado del Gateway (`lb://`); integrarlo con el balanceo de canales gRPC es posible pero queda fuera del alcance del taller.
+- **Outbox solo en investigadores.** `publicaciones-service` envía su confirmación de la Saga directamente con `KafkaTemplate`. En producción también debería usar un outbox: si cae entre guardar las publicaciones y enviar la confirmación, la Saga se detiene.
+- **Compensación de la Saga no implementada** (reto opcional): si publicaciones nunca confirma, el investigador queda en `EN_ELIMINACION` indefinidamente. Faltaría un temporizador que, tras un plazo, regrese el estado a `ACTIVO`.
+- **El `.proto` está copiado** en cada servicio (cambia solo `java_package`): cada servicio genera sus clases y ninguno depende del código del otro. En un equipo real viviría en un repositorio compartido.
+- **Puertos de las bases** en el host (distintos de los de la guía para convivir con el monolito): PostgreSQL 5436, MongoDB 27018. Kafka en 9092. Los nombres de contenedor son los que genera Docker Compose (`investigadores-service-rica-db-1`, etc.), no `investigadores-db` como dice el taller.
+- Kafka se agregó al `docker-compose.yml` de investigadores-service (contenedor `rica-kafka`).
+
+### Verificación realizada
+
+1. Eureka muestra `GATEWAY`, `INVESTIGADORES-SERVICE` y `PUBLICACIONES-SERVICE` en UP.
+2. `POST :8000/api/investigadores` → 201; la fila queda en `outbox_event` y el poller la publica en `investigadores.registrados` (consumida desde Kafka).
+3. `POST :8000/api/publicaciones` con correo real → 201; con correo inventado → 404 (gRPC).
+4. Circuit Breaker: con investigadores detenido, las primeras llamadas dan 503 `UNAVAILABLE` y las siguientes 503 "circuito abierto" sin ir a la red.
+5. Saga: `DELETE :8000/api/investigadores/{id}` → 202; el investigador pasa a `EN_ELIMINACION`, publicaciones marca sus publicaciones como huérfanas (`huerfana: true` en Mongo) y confirma, y el investigador se elimina físicamente.
+
+### Cómo correr
+
+```
+cd investigadores-service && docker compose up -d      # PostgreSQL + Kafka
+cd publicaciones-service  && docker compose up -d      # MongoDB
+# cuatro terminales, en este orden, con .\mvnw.cmd spring-boot:run:
+eureka-server (:8761) -> investigadores-service (:8080, gRPC :9090) -> publicaciones-service (:8081) -> gateway (:8000)
+```
+
+### Evidencia (Lección 6)
+
+En `evidencia/leccion6/`: `0-cuatro-terminales.png` (eureka-server, investigadores-service, publicaciones-service y gateway corriendo a la vez), las cuatro capturas individuales y `5-pruebas-saga-y-bd.png` (registro vía Gateway, publicación por gRPC con correo real y 404 con correo inventado, `DELETE` → 202 y el `SELECT` que ya no lista al investigador eliminado). En los logs de las capturas 2 y 3 se ve la secuencia de la Saga: `Evento N publicado en investigadores.en-eliminacion` → `Saga: 1 publicaciones de ... marcadas como huérfanas` → `Saga: publicaciones confirmó para ... Eliminando investigador.`
