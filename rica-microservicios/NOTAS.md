@@ -299,3 +299,15 @@ Con una sola imagen y variables de entorno (`SERVER_PORT=9000`) el artefacto que
 3. Cambiar las direcciones por variables de entorno que apunten a los nombres de servicio de esa red: `SPRING_MONGODB_URI=mongodb://rica-mongo:27017/rica_consultas`, `SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092` y `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka`.
 4. Reconfigurar Kafka con dos listeners (uno interno para los contenedores, `kafka:9092`, y otro externo para el host) porque hoy anuncia `localhost:9092`, que un contenedor no alcanza.
 5. Ordenar el arranque (`depends_on` con healthchecks) y revisar que Eureka registre la IP o el nombre alcanzable del contenedor (`prefer-ip-address` ya está activo).
+
+### Integración continua (Paso 7)
+
+- Primera ejecución del workflow en la rama `taller-contenedores`: **verde en los 5 jobs en 58 s** (no apareció el problema de CRLF en `mvnw`: cada servicio tiene su `.gitattributes` con `/mvnw text eol=lf`, así que no hizo falta el `.gitattributes` raíz del Paso 7.6).
+- Se cambió a propósito la aserción de `FichaInvestigadorTest` (`isEqualTo(2)` → `isEqualTo(3)`): la ejecución quedó **en rojo solo en `consultas-service`**; los otros cuatro jobs siguieron en verde.
+- `git revert HEAD --no-edit` y push: la ejecución volvió a **verde**.
+- Captura de la lista de ejecuciones (rojo y verde): `evidencia/leccion11/4-github-actions-rojo-y-verde.png`.
+- No se abrió Pull Request (el flujo de este repositorio es merge directo a `main`); la CI también corre en cada push a cualquier rama, incluido `main`.
+
+### Evidencia (Lección 11)
+
+En `evidencia/leccion11/`: `1-docker-images-y-history.png`, `2-eureka-panel-contenedor.png`, `3-capas-reutilizadas.png`, `4-github-actions-rojo-y-verde.png` y `6-redis-cache-aside.png`. La tabla de decisión de almacenes (punto 5 del entregable) y la lectura opcional (punto 6) están en las secciones de arriba.
