@@ -250,3 +250,52 @@ Nota sobre la captura 4: las líneas se extrajeron del buffer de la propia conso
 ### Evidencia (Lección 10)
 
 En `evidencia/leccion10/`: `1-actuator-health.png`, `2-saga-demo-001.png` (líneas con el id en los tres servicios y la brecha de consultas), `3a-metricas-http.png`, `3b-lag-antes-durante-despues.png` y `4-saga-atascada-en-eliminacion.png`.
+
+## Lección 11 — Contenedores y CI real para RICA
+
+### Qué se construyó
+
+- `eureka-server/Dockerfile` multi-etapa (Maven + JDK 25 para compilar; JRE 25 sin privilegios para ejecutar), `.dockerignore` y `docker-compose.yml`.
+- Corrección del hostname de Eureka (`eureka.instance.hostname: localhost`), tal como indica el taller para que dentro del contenedor no intente replicarse contra sí mismo.
+- `.github/workflows/ci.yml` en la raíz del repositorio: matriz de 5 jobs (eureka-server, gateway, investigadores-, publicaciones- y consultas-service) que ejecutan las pruebas unitarias. Se adaptó `working-directory` a `rica-microservicios/<servicio>` porque en este repositorio los servicios viven en esa subcarpeta, y `cache-dependency-path` apunta al `pom.xml` de cada servicio.
+
+### Resultados observados
+
+- Imagen `rica/eureka-server:0.1`: **590 MB en disco (171 MB de contenido)**; la capa del `.jar` pesa 60,7 MB y el resto es el JRE 25 de Temurin.
+- Contenedor con `docker run -p 8761:8761`: el panel de Eureka respondió desde el contenedor (captura `2-eureka-panel-contenedor.png`).
+- Caché de capas: el segundo `docker build`, sin cambios, tardó 3 s y marcó como `CACHED` todas las capas. Tras editar `application.yml` (6 s), solo se volvieron a ejecutar `COPY src`, `mvn package` y el `COPY --from=build` del jar; `COPY pom.xml` y `mvn dependency:go-offline` siguieron en caché. (En la captura, los pasos `FROM` aparecen como "ejecutado" porque solo se resuelve la imagen base; no tienen marca `CACHED`.) El primer build tardó más de 10 minutos por la red (descarga de Maven, Temurin 25 y dependencias).
+- Compose: `up -d --build` reutilizó todas las capas, el servicio quedó `Up` y `down` lo eliminó junto con su red.
+- Variables de entorno: la misma imagen con `-e SERVER_PORT=9000` respondió en el puerto 9000 con "No instances available" (los servicios siguen apuntando al 8761).
+- Redis: `SET ... EX 30`, `GET` (hit), `TTL`, `GET` tras 32 s (`(nil)`, miss) y `SET` + `DEL` + `GET` (invalidación). PowerShell eliminó las comillas del JSON de ejemplo al pasarlo a `redis-cli`; no afecta al patrón.
+- No se reprodujo a propósito el error de replicación de Eureka (`ReplicationTaskProcessor ... SocketTimeoutException`) antes de aplicar la corrección: el hostname se fijó desde el principio.
+### Respuestas del Paso 2 (Dockerfile multi-etapa)
+
+- **(a) ¿Por qué se copia primero `pom.xml` y luego `src`?** Porque Docker cachea cada instrucción como una capa y la invalida solo si cambia lo que esa instrucción copia o ejecuta. El `pom.xml` cambia poco y el código cambia casi siempre: si se copiara todo junto, cada cambio de una línea de código invalidaría la capa de descarga de dependencias y habría que bajar todo de nuevo. Con este orden, `dependency:go-offline` queda en caché mientras el `pom.xml` no cambie y solo se recompila el código.
+- **(b) ¿Qué contiene la imagen final y qué no?** Contiene el JRE 25 de Temurin, un usuario sin privilegios (`rica`) y el `app.jar` ya compilado. No contiene Maven, el JDK completo, el código fuente, el repositorio `~/.m2` ni los archivos de `target/` (la primera etapa se descarta). Por eso pesa mucho menos y expone menos superficie de ataque.
+- **(c) ¿Por qué `USER rica`?** Para no ejecutar el proceso como `root` dentro del contenedor: si alguien explotara una vulnerabilidad de la aplicación, tendría los permisos de un usuario de sistema sin privilegios y no los de `root`, lo que limita el daño (principio de mínimo privilegio).
+
+### Respuesta del Paso 5 (variables de entorno)
+
+Con una sola imagen y variables de entorno (`SERVER_PORT=9000`) el artefacto que se prueba es exactamente el que se despliega: lo único que cambia entre desarrollo, pruebas y producción es la configuración inyectada desde fuera (puerto, URLs, credenciales). Si hubiera una imagen distinta por entorno, lo que se probó ya no sería lo que se despliega, habría que construir y guardar N imágenes, y se mezclarían configuración y secretos con el código.
+
+### Tabla de decisión de almacenes (Paso 6.6) — módulo `consultas-service` de RICA
+
+| Tipo de dato | ¿Qué almacén? | ¿Por qué? / consulta principal que lo justifica | Costo de añadirlo |
+|---|---|---|---|
+| Investigadores (comando: registro, estado) | PostgreSQL (relacional) | Integridad y transacciones: correo único, estado `ACTIVO`/`EN_ELIMINACION`, una Saga de eliminación que lee y cambia una fila. Consulta: `existeCorreo`, `buscarPorCorreo` | Ya está en el proyecto; migraciones con Flyway |
+| Publicaciones (comando) | MongoDB (documental) | Esquema flexible por tipo (`detalles` distinto para artículo o libro) y escritura simple. Consulta: `findByInvestigadorCorreo` y conteo por año | Ya está en el proyecto |
+| Ficha de lectura (investigador + publicaciones) | MongoDB (modelo de lectura desnormalizado) | Un solo documento responde la consulta completa sin joins: `GET /api/consultas/investigadores/{correo}` y el ranking por `totalPublicaciones` | Ya está en el proyecto; hay que mantener la proyección por eventos |
+| Eventos entre servicios | Kafka (log de eventos) | Reproducir, desacoplar productor y consumidor y reconstruir el modelo de lectura. Consulta: leer desde un offset | Ya está en el proyecto; costo operativo alto (broker, lag, DLT) |
+| Caché de fichas calientes | Redis (clave-valor con TTL) | Aliviar lecturas repetidas de la misma ficha: `GET ficha:{correo}` con TTL e invalidación al llegar un evento | Un servicio más que operar, invalidar bien (si no, datos viejos) y decidir el TTL; **hoy no se justifica** |
+| Búsqueda de texto de títulos y resúmenes | Motor de búsqueda (Elasticsearch/OpenSearch) o un índice de texto de MongoDB | Consultas "contiene la palabra X" con relevancia que un `LIKE` no resuelve bien | Otro clúster que sincronizar; mejor empezar con el índice de texto de MongoDB |
+| Contadores y estadísticas | MongoDB (`$inc` atómico) o una vista calculada | Contar altas sin recorrer todo; la idempotencia se resuelve con la tabla de eventos procesados | Sin costo extra (misma base) |
+
+**Párrafo final:** en RICA ya se usan tres tecnologías (PostgreSQL, MongoDB y Kafka) y cada una resuelve un problema distinto y real: transacciones y unicidad para los investigadores, documentos flexibles para las publicaciones y un log de eventos para desacoplar servicios y reconstruir la lectura. Más allá de eso, Redis y un motor de búsqueda serían optimizaciones sin una consulta lenta que las justifique todavía: el modelo de lectura ya es un solo documento por investigador y la carga actual es mínima. Una base relacional bien usada bastaría para casi todo el proyecto, y cada tecnología adicional suma servicio que operar, datos que mantener sincronizados y fallas posibles; añadiría una caché solo después de medir una latencia que lo justifique (por ejemplo, con las métricas del Taller 10).
+
+### Lectura opcional — qué haría falta para ejecutar `consultas-service` también como contenedor
+
+1. Reutilizar el mismo `Dockerfile` multi-etapa cambiando el puerto expuesto a 8083.
+2. Ponerlo en la misma red de Docker que MongoDB, Kafka y Eureka (`docker network` o un `docker-compose.yml` raíz con todos los servicios), porque `localhost` dentro del contenedor ya no es el host.
+3. Cambiar las direcciones por variables de entorno que apunten a los nombres de servicio de esa red: `SPRING_MONGODB_URI=mongodb://rica-mongo:27017/rica_consultas`, `SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092` y `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka`.
+4. Reconfigurar Kafka con dos listeners (uno interno para los contenedores, `kafka:9092`, y otro externo para el host) porque hoy anuncia `localhost:9092`, que un contenedor no alcanza.
+5. Ordenar el arranque (`depends_on` con healthchecks) y revisar que Eureka registre la IP o el nombre alcanzable del contenedor (`prefer-ip-address` ya está activo).

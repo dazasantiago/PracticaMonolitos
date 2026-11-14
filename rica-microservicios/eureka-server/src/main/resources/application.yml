@@ -1,3 +1,4 @@
+# Registro de servicios RICA (Eureka)
 server:
   port: 8761
 
@@ -6,6 +7,10 @@ spring:
     name: eureka-server
 
 eureka:
+  instance:
+    # Con este nombre Eureka se reconoce a sí mismo y no intenta replicarse
+    # contra "localhost:8761" como si fuera otro nodo.
+    hostname: localhost
   client:
     register-with-eureka: false
     fetch-registry: false
