@@ -2,6 +2,8 @@ package com.rica.investigadoresservice.investigadores.aplicacion;
 
 import com.rica.investigadoresservice.compartido.RecursoNoEncontradoException;
 import com.rica.investigadoresservice.investigadores.dominio.Investigador;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,6 +12,8 @@ import java.util.Map;
 
 @Service
 public class InvestigadorService implements InvestigadorUseCase {
+
+    private static final Logger log = LoggerFactory.getLogger(InvestigadorService.class);
 
     private final RepositorioInvestigadores repositorioInvestigadores;
     private final InvestigadorFactory investigadorFactory;
@@ -61,6 +65,7 @@ public class InvestigadorService implements InvestigadorUseCase {
         repositorioInvestigadores.guardar(investigador);
 
         String correo = investigador.getCorreoInstitucional().valor();
+        log.info("Saga: inicia la eliminación de {} (estado EN_ELIMINACION)", correo);
         publicadorEventos.publicar(
                 "investigadores.en-eliminacion",
                 correo,

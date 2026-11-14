@@ -208,3 +208,45 @@ Reintentar sin fin un mensaje que no se puede procesar bloquea la partición (na
 En `evidencia/leccion9/`: `1-linea-base-reintentos.png`, `2-dlt-con-cabeceras.png`, `3-estadisticas-descuadre-y-idempotente.png` (valores antes/después del Paso 5 y tras repetir los eventos con el consumidor idempotente) y `4-log-ya-procesado.png` (líneas `evento ... ya procesado, se ignora`).
 
 Nota sobre la captura 4: las líneas se extrajeron del buffer de la propia consola donde corre `consultas-service` (el log de arranque se había desplazado fuera de la vista) y se reordenaron una por registro de log, sin alterar su contenido. La captura 1 se construyó igual a partir del log del servicio guardado en archivo.
+
+## Lección 10 — Observabilidad real en RICA
+
+### Qué se construyó
+
+- **Spring Boot Actuator** en investigadores-, publicaciones- y consultas-service (`/actuator/health`, `/info`, `/metrics`) y el patrón de log `%5p [${spring.application.name},%X{correlationId:-}]`: cada línea muestra servicio e id de correlación.
+- **`CorrelationIdFilter`** (investigadores-service): toma el id de la cabecera `X-Correlation-Id` o genera un UUID, lo pone en el MDC, lo devuelve en la respuesta y lo limpia en un `finally`.
+- **El id viaja dentro de los eventos:** `OutboxPublicadorEventos` lo copia desde el MDC al JSON del evento; `InvestigadorEnEliminacionListener` (publicaciones) y `PublicacionesMarcadasListener` (investigadores) lo leen del mensaje, lo ponen en el MDC con `MDC.putCloseable` y lo reenvían en la confirmación.
+- Línea de log nueva en `InvestigadorService.iniciarEliminacion` (`Saga: inicia la eliminación de ...`): sin ella, el primer paso de la Saga no deja ninguna línea con el id.
+
+### Diferencias con la guía
+
+- Agregué también `spring-boot-starter-micrometer-metrics` desde el principio (la guía lo sugiere solo si `/actuator/metrics` da 404).
+- El grupo de consultas actual es `consultas-service-v3` (la guía menciona `v2`).
+- En el Paso 8 la guía dice "detén publicaciones-service, crea un investigador con una publicación y elimínalo": con publicaciones detenido no se puede registrar la publicación, así que primero se creó el investigador con su publicación y después se detuvo el servicio.
+- No se ejecutó una "línea base" en vivo (Paso 2) antes de aplicar los cambios: no hay evidencia asociada en el entregable.
+
+### Resultados observados
+
+- `/actuator/health` UP en los tres servicios (investigadores con `db` PostgreSQL; publicaciones y consultas con `mongo`).
+- Con `X-Correlation-Id: demo-001`, el id se devolvió en la respuesta y la Saga se reconstruyó buscándolo en los logs:
+  - investigadores-service: `Saga: inicia la eliminación de ...` y `Saga: publicaciones confirmó para ... Eliminando investigador.`
+  - publicaciones-service: `Saga: 2 publicaciones de ... marcadas como huérfanas`
+  - consultas-service: **ninguna línea** con el id (brecha).
+- `/actuator/metrics/http.server.requests`: COUNT, TOTAL_TIME y MAX (señales R y D del método RED); con `?tag=status:404`, el error provocado (E).
+- Lag de `consultas-service-v3`: 0 antes; **3** en `investigadores.registrados` con consultas detenido y tres altas nuevas; 0 al volver a arrancarlo.
+- Saga atascada (`demo-002`): con publicaciones detenido, la ficha del investigador quedó en `EN_ELIMINACION` y el grupo `publicaciones-service` mostró lag 1 en `investigadores.en-eliminacion`. Al reiniciarlo, procesó el evento pendiente, la Saga continuó con el mismo id y la ficha desapareció.
+
+### Brecha de trazabilidad en consultas-service
+
+`ProyeccionListener` no lee `correlationId` del mensaje, así que el proyector escribe sus líneas con el id vacío (`[consultas-service,]`) y la traza de la Saga se corta en el lado de lectura. Cerrarla exige el mismo patrón del Paso 5 en cada método del listener: leer `correlationId` del JSON (o `"sin-correlacion"`), ponerlo en el MDC con `MDC.putCloseable` mientras se llama al proyector, y dejar que el `try-with-resources` lo restaure. No se aplicó porque el taller lo pide como nota, no como cambio.
+
+### Paso 9 — Discusión: ¿y si nunca vuelve?
+
+1. **Falla permanente de publicaciones:** el investigador quedaría en `EN_ELIMINACION` indefinidamente (bloqueo semántico: nunca desaparece a medias, pero tampoco se recupera) y el mensaje se iría a la DLT o reintentaría sin fin según la configuración del consumidor. Hoy nadie se daría cuenta salvo que alguien mire la ficha en consultas o el lag del grupo.
+2. **Compensación:** un temporizador (o un job) en investigadores-service detecta investigadores en `EN_ELIMINACION` por más de un plazo y publica `investigadores.eliminacion-cancelada` (por el Outbox, con el mismo `correlationId`); investigadores lo consume para devolver el estado a `ACTIVO`, publicaciones lo consume para desmarcar las huérfanas de ese correo, y consultas para volver la ficha a `ACTIVO`. Sería idempotente si cada paso solo fija un estado destino (`ACTIVO`/`huerfana=false`) en vez de alternarlo, y si ignora el evento cuando el investigador ya está `ACTIVO` o ya fue eliminado.
+3. **Métrica y alerta:** una gauge `sagas_eliminacion_atascadas` (investigadores en `EN_ELIMINACION` hace más de 10 minutos, consultando la tabla) con alerta si es mayor que cero durante 5 minutos, más el lag del grupo `publicaciones-service` en `investigadores.en-eliminacion` con alerta si supera 0 por más de unos minutos.
+4. **Coreografía u orquestación con cuatro pasos más:** orquestación. Con seis pasos, cada servicio que reacciona al evento del anterior vuelve el flujo difícil de seguir, de depurar y de compensar (hay que saber qué paso falló y deshacer en orden); un orquestador concentra el estado de la Saga, los plazos y las compensaciones en un solo lugar, a costa de un componente más y de acoplar los participantes a él.
+
+### Evidencia (Lección 10)
+
+En `evidencia/leccion10/`: `1-actuator-health.png`, `2-saga-demo-001.png` (líneas con el id en los tres servicios y la brecha de consultas), `3a-metricas-http.png`, `3b-lag-antes-durante-despues.png` y `4-saga-atascada-en-eliminacion.png`.
